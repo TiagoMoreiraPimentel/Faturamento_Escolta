@@ -1,0 +1,30 @@
+<RCC>
+  <qresource prefix="ico">
+    <file>ico/adicionar.png</file>
+    <file>ico/atualizar_sistema.webp</file>
+    <file>ico/BUTTON_BASE.png</file>
+    <file>ico/button_entrar.png</file>
+    <file>ico/button_sair.png</file>
+    <file>ico/calcular.png</file>
+    <file>ico/calendario.png</file>
+    <file>ico/cancelar.png</file>
+    <file>ico/deletar_linha.png</file>
+    <file>ico/editar_linha.png</file>
+    <file>ico/export-csv.png</file>
+    <file>ico/export-xlsx.png</file>
+    <file>ico/filtro.png</file>
+    <file>ico/fundo_preto.jpg</file>
+    <file>ico/fundo_security.jpg</file>
+    <file>ico/fundo1.png</file>
+    <file>ico/Fundo2.jpg</file>
+    <file>ico/investigacao.png</file>
+    <file>ico/loading.gif</file>
+    <file>ico/logo.ico.png</file>
+    <file>ico/logo_security_oficial.ico</file>
+    <file>ico/logo_security_oficial.png</file>
+    <file>ico/resete.png</file>
+    <file>ico/sair.png</file>
+    <file>ico/salvar_linha.png</file>
+    <file>ico/vizualizar.png</file>
+  </qresource>
+</RCC>

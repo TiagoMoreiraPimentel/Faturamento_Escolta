@@ -2,16 +2,14 @@ import os
 import sys
 import oracledb
 import pandas as pd
+import threading
 
-from PyQt5 import QtWidgets
+from PyQt5 import QtWidgets, QtGui
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence, QPixmap, QBrush, QPalette
 from PyQt5.QtWidgets import QMainWindow, QApplication, QShortcut, QAction, QMessageBox
 from tkinter import Tk, filedialog
 from tela_menu import Ui_MainWindow
-
-# pyuic5 -x tela_menu.ui -o tela_menu.py
-
 
 class MainWindow(QMainWindow):
 
@@ -24,6 +22,11 @@ class MainWindow(QMainWindow):
 
         # Inicializa a variável pixmap_scaled
         self.pixmap_scaled = None
+
+        # Inicializa o GIF de loading
+        self.gif = QtGui.QMovie("ico/loading.gif")
+        self.ui.loadingLabel.setMovie(self.gif)
+        self.ui.loadingLabel.setVisible(False)
 
         # Atalho para fechar o formulário com a tecla Esc
         QShortcut(QKeySequence("Esc"), self).activated.connect(self.fechar_tela_menu)
@@ -40,55 +43,57 @@ class MainWindow(QMainWindow):
         # Adicionando ações ao menu
         self.importar_excel_action = QAction("IMPORTAR EXCEL", self)
         self.operacao_menu.addAction(self.importar_excel_action)
+
         # Estilo do menu - fazendo os itens parecerem botões com borda arredondada
         self.setStyleSheet(
             """
-                            QMenuBar {
-                                background-color: #fecb00;
-                                color: black;
-                                border: 2px solid #ccc;
-                                border-radius: 20px;
-                            }
-                            QMenuBar::item {
-                                background-color: #d0d3db;
-                                color: black;
-                                padding: 5px 20px;
-                                border: 1px solid black; /* Adiciona borda preta */
-                                margin: 1px; /* Adiciona margem para espaçamento */
-                            }
-                            QMenuBar::item:selected {
-                                background-color: #d0d3db;
-                                color: white;
-                            }
-                            QMenuBar::item:pressed {
-                                background-color: #5d605d;
-                                color: white;
-                            }
-                            QMenu {
-                                background-color: #d0d3db;
-                                border: 1px solid #ccc;
-                                border-radius: 5px;
-                            }
-                            QMenu::item {
-                                background-color: #d0d3db;
-                                border: 1px solid #ccc;
-                                border-radius: 5px;
-                                padding: 5px 20px;
-                            }
-                            QMenu::item:selected {
-                                background-color: #5d605d;
-                                color: white;
-                            }
-                            QAction {
-                                padding: 10px;
-                                background-color: #5d605d;
-                                border-radius: 5px;
-                            }
-                            QAction:hover {
-                                background-color: #5d605d;
-                            }
-                        """
+            QMenuBar {
+                background-color: #fecb00;
+                color: black;
+                border: 2px solid #ccc;
+                border-radius: 20px;
+            }
+            QMenuBar::item {
+                background-color: #d0d3db;
+                color: black;
+                padding: 5px 20px;
+                border: 1px solid black; /* Adiciona borda preta */
+                margin: 1px; /* Adiciona margem para espaçamento */
+            }
+            QMenuBar::item:selected {
+                background-color: #d0d3db;
+                color: white;
+            }
+            QMenuBar::item:pressed {
+                background-color: #5d605d;
+                color: white;
+            }
+            QMenu {
+                background-color: #d0d3db;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+            }
+            QMenu::item {
+                background-color: #d0d3db;
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                padding: 5px 20px;
+            }
+            QMenu::item:selected {
+                background-color: #5d605d;
+                color: white;
+            }
+            QAction {
+                padding: 10px;
+                background-color: #5d605d;
+                border-radius: 5px;
+            }
+            QAction:hover {
+                background-color: #5d605d;
+            }
+            """
         )
+
         # Conectando eventos específicos para cada ação
         self.fechar_action.triggered.connect(self.fechar_tela_menu)
         self.importar_excel_action.triggered.connect(self.chamar_funcao_importar_ler_excel)
@@ -146,7 +151,7 @@ class MainWindow(QMainWindow):
             # Lê a planilha inteira
             df = pd.read_excel(file_path, sheet_name=None)  # Lê todas as abas
 
-            self.registrar_excel_banco(file_path)
+            self.chamar_registrar_excel_banco(file_path)
 
             return df
         except Exception as e:
@@ -162,6 +167,7 @@ class MainWindow(QMainWindow):
 
     # Função que realizar o registro das informações da planilha no banco de dados oracle.
     def registrar_excel_banco(self, file_path):
+
         try:
             creds = self.get_db_credentials()
 
@@ -216,6 +222,20 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Erro inesperado: {e}")
             QtWidgets.QMessageBox.critical(self, "Erro inesperado", f"Ocorreu um erro inesperado: {e}")
+        finally:
+            if self.gif:
+                self.gif.stop()
+            self.ui.loadingLabel.setVisible(False)
+
+    def chamar_registrar_excel_banco(self, file_path):
+        """Inicia a execução da consulta em uma thread separada."""
+        # Mostrar a label e iniciar o GIF
+        self.ui.loadingLabel.setVisible(True)
+        self.gif.start()
+
+        # Criar uma thread para executar a consulta
+        self.thread = threading.Thread(target=self.registrar_excel_banco, args=(file_path,))
+        self.thread.start()
 
 
 if __name__ == "__main__":

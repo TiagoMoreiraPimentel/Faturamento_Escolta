@@ -17,6 +17,16 @@ class Ui_MainWindow(object):
         MainWindow.resize(1300, 750)
         self.centralwidget = QtWidgets.QWidget(MainWindow)
         self.centralwidget.setObjectName("centralwidget")
+        self.label = QtWidgets.QLabel(self.centralwidget)
+        self.label.setGeometry(QtCore.QRect(300, 210, 541, 111))
+        self.label.setText("")
+        self.label.setPixmap(QtGui.QPixmap(":/ico/loading.gif"))
+        self.label.setObjectName("label")
+        self.loadingLabel = QtWidgets.QLabel(self.centralwidget)
+        self.loadingLabel.setGeometry(QtCore.QRect(350, 260, 541, 121))
+        self.loadingLabel.setText("")
+        self.loadingLabel.setPixmap(QtGui.QPixmap(":/ico/ico/loading.gif"))
+        self.loadingLabel.setObjectName("loadingLabel")
         MainWindow.setCentralWidget(self.centralwidget)
 
         self.retranslateUi(MainWindow)
@@ -25,6 +35,7 @@ class Ui_MainWindow(object):
     def retranslateUi(self, MainWindow):
         _translate = QtCore.QCoreApplication.translate
         MainWindow.setWindowTitle(_translate("MainWindow", "Menu"))
+import ico_rc
 
 
 if __name__ == "__main__":
