@@ -1,32 +1,44 @@
 import os
 import sys
+import time
+import traceback
+
 import oracledb
 import pandas as pd
 import threading
 
-from PyQt5 import QtWidgets, QtGui
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QKeySequence, QPixmap, QBrush, QPalette
-from PyQt5.QtWidgets import QMainWindow, QApplication, QShortcut, QAction, QMessageBox
+from PyQt5 import QtWidgets
+from PyQt5.QtCore import Qt, QMetaObject, pyqtSignal
+from PyQt5.QtGui import QKeySequence, QPixmap, QBrush, QPalette, QMovie
+from PyQt5.QtWidgets import QMainWindow, QApplication, QShortcut, QAction, QMessageBox, QWidget, QVBoxLayout, QLabel
 from tkinter import Tk, filedialog
 from tela_menu import Ui_MainWindow
 
+
 class MainWindow(QMainWindow):
 
+    sinal_finalizacao = pyqtSignal(int)  # Cria um sinal que recebe um inteiro
+
     def __init__(self):
+
         super().__init__()
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self.showFullScreen()
         self.set_background()
 
+        # sinalizar processamento para fechar a thread
+        self.sinal_finalizacao.connect(self.finalizarProcessamento)
+
+        # Inicializa o QMovie e associa à label_loading (se necessário)
+        self.gif = QMovie("ico/loading.gif")  # Substitua pelo caminho correto do GIF
+        self.ui.label_loading.setMovie(self.gif)
+
+        # ocultar
+        self.ui.label_loading.setVisible(False)
+
         # Inicializa a variável pixmap_scaled
         self.pixmap_scaled = None
-
-        # Inicializa o GIF de loading
-        self.gif = QtGui.QMovie("ico/loading.gif")
-        self.ui.loadingLabel.setMovie(self.gif)
-        self.ui.loadingLabel.setVisible(False)
 
         # Atalho para fechar o formulário com a tecla Esc
         QShortcut(QKeySequence("Esc"), self).activated.connect(self.fechar_tela_menu)
@@ -129,6 +141,13 @@ class MainWindow(QMainWindow):
         palette.setBrush(QPalette.Background, brush)
         self.setPalette(palette)
 
+    def get_db_credentials(self):
+        return {
+            "user": os.getenv("DB_USER", "DSCSECTOOLS"),
+            "password": os.getenv("DB_PASSWORD", "DSCs3cT00Ls2022"),
+            "dsn": os.getenv("DB_DSN", "QASBRRACT2-SCAN.PHX-DC.DHL.COM:1521/DSCSECTOOLS"),
+        }
+
     def chamar_funcao_importar_ler_excel(self):
         # Utilização da função que realiza o upload de arquivos para o sistema
         data = self.importar_ler_excel()
@@ -138,44 +157,115 @@ class MainWindow(QMainWindow):
                 print(df.head())  # Exibe as primeiras linhas de cada aba
 
     def importar_ler_excel(self):
-        # Abre um diálogo para selecionar o arquivo
-        Tk().withdraw()  # Esconde a janela principal do Tkinter
-        file_path = filedialog.askopenfilename(title="Selecione a planilha Excel",
-                                               filetypes=[("Excel Files", "*.xlsx;*.xls")])
-
-        if not file_path:
-            print("Nenhum arquivo selecionado.")
-            return None
-
         try:
-            # Lê a planilha inteira
-            df = pd.read_excel(file_path, sheet_name=None)  # Lê todas as abas
+            resposta = QMessageBox.question(
+                self,
+                "Confirmação",
+                "Tem certeza de que deseja deletar os dados da tabela de faturamento anterior?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
 
-            self.chamar_registrar_excel_banco(file_path)
+            if resposta == QMessageBox.Yes:
+                # Query para limpar a tabela de faturamento antes de registrar
+                creds = self.get_db_credentials()
 
-            return df
+                # Conectar ao banco de dados
+                with oracledb.connect(**creds) as connection:
+                    print("Conexão estabelecida.")
+                    with connection.cursor() as cursor:
+                        print("Executando a limpeza...")
+
+                        # Comando para verificar se a tabela tem dados
+                        check_query = "SELECT COUNT(*) FROM FATURAMENTO_ESCOLTA_BASE"
+                        cursor.execute(check_query)
+                        row_count = cursor.fetchone()[0]
+
+                        print(row_count)
+
+                        if row_count > 0:
+                            # Comando DELETE
+                            query = """
+                                DELETE FROM FATURAMENTO_ESCOLTA_BASE
+                            """
+                            try:
+                                cursor.execute(query)  # Executa a query para deletar os dados
+                                connection.commit()  # Faz commit para garantir que as alterações sejam salvas
+                                print("Query executada com sucesso.")
+
+                                # Usar cursor.rowcount para contar o número de linhas afetadas
+                                deletador_contador = cursor.rowcount
+                                print(f"Dados deletados da tabela de faturamento: {deletador_contador}")
+
+                                # Exibe a quantidade de registros deletados
+                                QMessageBox.information(
+                                    self,  # widget pai
+                                    "Confirmação",  # Título da janela
+                                    f"Dados deletados da tabela de faturamento: {deletador_contador}"  # Mensagem
+                                )
+                            except oracledb.Error as e:
+                                print(f"Erro ao executar a query: {e}")
+                                QMessageBox.warning(
+                                    self,
+                                    "Erro",
+                                    f"Erro ao executar a query: {e}",
+                                )
+                                return None
+                        else:
+                            print("Tabela já está vazia. Nenhum dado foi deletado.")
+
+                        # Abre o diálogo para selecionar o arquivo
+                        Tk().withdraw()  # Esconde a janela principal do Tkinter
+                        file_path = filedialog.askopenfilename(title="Selecione a planilha Excel",
+                                                               filetypes=[("Excel Files", "*.xlsx;*.xls")])
+
+                        if not file_path:
+                            print("Nenhum arquivo selecionado.")
+                            return None
+
+                # Lê a planilha inteira
+                df = pd.read_excel(file_path, sheet_name=None)  # Lê todas as abas da planilha
+
+                # Chama a função para registrar os dados no banco após a limpeza
+                self.chamar_registrar_excel_banco(file_path)
+
+                return df
+
         except Exception as e:
-            print(f"Erro ao ler o arquivo: {e}")
+            print(f"Erro ao processar a requisição: {e}")
             return None
 
-    def get_db_credentials(self):
-        return {
-            "user": os.getenv("DB_USER", "DSCSECTOOLS"),
-            "password": os.getenv("DB_PASSWORD", "DSCs3cT00Ls2022"),
-            "dsn": os.getenv("DB_DSN", "QASBRRACT2-SCAN.PHX-DC.DHL.COM:1521/DSCSECTOOLS"),
-        }
+    def chamar_registrar_excel_banco(self, file_path):
+        """Inicia a execução da consulta em uma thread separada."""
+
+        # Mostrar a label e iniciar o GIF
+        self.ui.label_loading.setVisible(True)
+        self.gif.start()  # Inicia o GIF
+
+        # Criar uma thread para executar a consulta
+        self.thread = threading.Thread(target=self.registrar_excel_banco, args=(file_path,))
+        self.thread.start()
 
     # Função que realizar o registro das informações da planilha no banco de dados oracle.
     def registrar_excel_banco(self, file_path):
 
         try:
             creds = self.get_db_credentials()
+            df = pd.read_excel(file_path, dtype=str)  # Lê como string para evitar problemas
 
-            # Lê os dados do Excel
-            df = pd.read_excel(file_path, dtype=str)  # Lê tudo como string para evitar erros
+            required_columns = [
+                "N_SE", "CLIENTES", "DESCRICAO_SE", "EMPRESA_ESCOLTA", "SITUACAO", "COBERTURA",
+                "AGENDAMENTO_DATA_HORA", "CHEGADA_ORIGEM_DATA_HORA", "CHEGADA_DESTINO_DATA_HORA",
+                "FIM_EMISSAO_REAL", "FRANQUIA_HORAS", "VALOR_HORA_EXCEDENTE", "DISTANCIA_REAL",
+                "FRANQUIA_KM", "VALOR_KM_EXCEDENTE", "PRECO_FRANQUIA_BASE", "VALOR_TOTAL_EMISSAO",
+                "STATUS_PAGAMENTO", "VIAGEM_CONSIDERADA", "STATUS"
+            ]
+
+            # Verifica se todas as colunas necessárias estão presentes
+            missing_cols = [col for col in required_columns if col not in df.columns]
+            if missing_cols:
+                raise ValueError(f"Colunas ausentes na planilha: {missing_cols}")
 
             with oracledb.connect(**creds) as connection:
-                print("Conexão estabelecida.")
                 with connection.cursor() as cursor:
                     print("Executando a inserção...")
 
@@ -189,53 +279,82 @@ class MainWindow(QMainWindow):
                         :1, :2, :3, :4, :5, :6, :7, :8, :9, :10, :11, :12, :13, :14, :15, :16, :17, :18, :19, :20
                     )"""
 
-                    # Contador para exibir o progresso
                     total_registros = len(df)
-                    contador = 0
+                    if total_registros == 0:
+                        raise ValueError("A planilha está vazia!")
 
-                    # Inserir cada linha do DataFrame
-                    for _, row in df.iterrows():
-                        try:
-                            # Assegura que os valores são strings e lidando com valores nulos
-                            row = row.fillna("")  # Substitui valores nulos por uma string vazia
-                            values = tuple(row)  # Converte a linha em uma tupla
+                    # Substitui valores nulos por string vazia e converte para lista de tuplas
+                    data = [tuple(row.fillna("").values) for _, row in df.iterrows()]
 
-                            print(f"Inserindo registro: {row.to_dict()}")  # Exibe o registro a ser inserido
-
-                            cursor.execute(query, values)  # Executa a inserção
-
-                            # Incrementa o contador e exibe o progresso no terminal
-                            contador += 1
-                            print(f"Registros inseridos: {contador}/{total_registros}", end='\r')
-
-                        except Exception as e:
-                            print(f"Erro ao inserir linha {row.to_dict()}: {e}")
-
-                    # Commit das inserções
+                    # Inserção em lote
+                    cursor.executemany(query, data)
                     connection.commit()
-                    print(f"\nDados inseridos com sucesso. Total de registros: {contador}")
-                    QtWidgets.QMessageBox.information(self, "Sucesso", "Dados registrados com sucesso!")
+
+                    print(f"Registros inseridos: {total_registros}")
 
         except oracledb.DatabaseError as e:
             print(f"Erro de banco de dados: {e}")
             QtWidgets.QMessageBox.critical(self, "Erro", f"Falha na conexão ou na inserção: {e}")
+
         except Exception as e:
             print(f"Erro inesperado: {e}")
+            print(traceback.format_exc())  # Exibe o erro completo no console
             QtWidgets.QMessageBox.critical(self, "Erro inesperado", f"Ocorreu um erro inesperado: {e}")
+
         finally:
-            if self.gif:
-                self.gif.stop()
-            self.ui.loadingLabel.setVisible(False)
+            if hasattr(self, 'gif') and self.gif:
+                try:
+                    self.sinal_finalizacao.emit(total_registros)
+                except RuntimeError:
+                    pass  # Ignora erro caso o objeto já tenha sido destruído
 
-    def chamar_registrar_excel_banco(self, file_path):
-        """Inicia a execução da consulta em uma thread separada."""
-        # Mostrar a label e iniciar o GIF
-        self.ui.loadingLabel.setVisible(True)
-        self.gif.start()
+    # Função que finaliza a thread para usar os parametros sem erro
+    def finalizarProcessamento(self, total_registros):
+        """Atualiza a UI e exibe a mensagem na thread principal."""
+        self.gif.stop()
+        self.ui.label_loading.setVisible(False)
+        self.thread = None  # Limpa a referência da thread
 
-        # Criar uma thread para executar a consulta
-        self.thread = threading.Thread(target=self.registrar_excel_banco, args=(file_path,))
-        self.thread.start()
+        QMessageBox.information(self, "Sucesso", f"Dados registrados com sucesso! Total: {total_registros}")
+
+        self.consultar_viagem_benner()
+    def consultar_viagem_benner(self):
+        try:
+            creds = self.get_db_credentials()
+
+            with oracledb.connect(**creds) as connection:
+                with connection.cursor() as cursor:
+                    print("Executando a consulta...")
+
+                    query = """SELECT VIAGEM_CONSIDERADA 
+                               FROM FATURAMENTO_ESCOLTA_BASE 
+                               WHERE VIAGEM_CONSIDERADA IS NOT NULL 
+                               AND REGEXP_LIKE(VIAGEM_CONSIDERADA, '^\\d{4}/')"""
+
+                    # Executa a consulta
+                    cursor.execute(query)
+
+                    # Recupera os resultados
+                    resultados = cursor.fetchall()
+
+                    # Exibir os resultados no console
+                    for linha in resultados:
+                        print(linha[0])  # Exibe cada resultado
+
+                    # Contar quantas linhas foram retornadas
+                    num_linhas = len(resultados)
+                    print(f"Número de linhas retornadas: {num_linhas}")
+
+                    return resultados, num_linhas  # Retorna os dados e a contagem
+
+        except oracledb.DatabaseError as e:
+            print(f"Erro de banco de dados: {e}")
+            QtWidgets.QMessageBox.critical(self, "Erro", f"Falha na conexão ou 2 consulta dos numeros de viagem benner: {e}")
+
+        except Exception as e:
+            print(f"Erro inesperado: {e}")
+            print(traceback.format_exc())  # Exibe o erro completo no console
+            QtWidgets.QMessageBox.critical(self, "Erro inesperado", f"Ocorreu um erro inesperado  consulta dos numeros de viagem benner: {e}")
 
 
 if __name__ == "__main__":
@@ -243,3 +362,4 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
+1
