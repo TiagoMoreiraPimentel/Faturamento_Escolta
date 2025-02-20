@@ -1,16 +1,14 @@
 import os
 import sys
-import time
 import traceback
-
 import oracledb
 import pandas as pd
 import threading
 
 from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt, QMetaObject, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QKeySequence, QPixmap, QBrush, QPalette, QMovie
-from PyQt5.QtWidgets import QMainWindow, QApplication, QShortcut, QAction, QMessageBox, QWidget, QVBoxLayout, QLabel
+from PyQt5.QtWidgets import QMainWindow, QApplication, QShortcut, QAction, QMessageBox
 from tkinter import Tk, filedialog
 from tela_menu import Ui_MainWindow
 
@@ -148,6 +146,14 @@ class MainWindow(QMainWindow):
             "dsn": os.getenv("DB_DSN", "QASBRRACT2-SCAN.PHX-DC.DHL.COM:1521/DSCSECTOOLS"),
         }
 
+    # Se conecta ao banco de dados Oracle.
+    def get_db_credentials_benner(self):
+        return {
+            "user": os.getenv("DB_USER", "LOGISTICA_RO"),
+            "password": os.getenv("DB_PASSWORD", "LOg1s6F3nnErASH24Pr3"),
+            "dsn": os.getenv("DB_DSN", "MEGBRRACDR2-SCAN.PHX-DC.DHL.COM:1521/BENNPRD2_RPT"),
+        }
+
     def chamar_funcao_importar_ler_excel(self):
         # Utilização da função que realiza o upload de arquivos para o sistema
         data = self.importar_ler_excel()
@@ -187,8 +193,12 @@ class MainWindow(QMainWindow):
                             query = """
                                 DELETE FROM FATURAMENTO_ESCOLTA_BASE
                             """
+                            query2 = """
+                                DELETE FROM FATURAMENTO_ESCOLTA_RESULTADO_BENNER
+                            """
                             try:
                                 cursor.execute(query)  # Executa a query para deletar os dados
+                                cursor.execute(query2)
                                 connection.commit()  # Faz commit para garantir que as alterações sejam salvas
                                 print("Query executada com sucesso.")
 
@@ -318,48 +328,219 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Sucesso", f"Dados registrados com sucesso! Total: {total_registros}")
 
         self.consultar_viagem_benner()
+
+    # Função que realiza a consulta no BD benner
     def consultar_viagem_benner(self):
         try:
             creds = self.get_db_credentials()
 
             with oracledb.connect(**creds) as connection:
                 with connection.cursor() as cursor:
-                    print("Executando a consulta...")
+                    print("Executando a primeira consulta...")
 
-                    query = """SELECT VIAGEM_CONSIDERADA 
-                               FROM FATURAMENTO_ESCOLTA_BASE 
-                               WHERE VIAGEM_CONSIDERADA IS NOT NULL 
-                               AND REGEXP_LIKE(VIAGEM_CONSIDERADA, '^\\d{4}/')"""
+                    # Consulta para obter os números de viagem
+                    query1 = """SELECT VIAGEM_CONSIDERADA 
+                                FROM FATURAMENTO_ESCOLTA_BASE 
+                                WHERE VIAGEM_CONSIDERADA IS NOT NULL 
+                                AND REGEXP_LIKE(VIAGEM_CONSIDERADA, '^\\d{4}/')"""
 
-                    # Executa a consulta
-                    cursor.execute(query)
-
-                    # Recupera os resultados
+                    cursor.execute(query1)
                     resultados = cursor.fetchall()
 
-                    # Exibir os resultados no console
-                    for linha in resultados:
-                        print(linha[0])  # Exibe cada resultado
+                    quantidade_viagens = len(resultados)
 
-                    # Contar quantas linhas foram retornadas
-                    num_linhas = len(resultados)
-                    print(f"Número de linhas retornadas: {num_linhas}")
+                    # Se não houver resultados, retorna vazio
+                    if not resultados:
+                        print("Nenhuma viagem encontrada.")
+                        return [], 0
 
-                    return resultados, num_linhas  # Retorna os dados e a contagem
+                    # Extrair os números das viagens e formatar para a consulta SQL
+                    numeros_viagem = [f"'{linha[0].strip()}'" for linha in resultados]
+                    numeros_viagem_str = ",\n".join(numeros_viagem)  # Adiciona quebra de linha entre os valores
+
+                    print(f"Números de Viagem para consulta:\n{numeros_viagem_str}")
+
+                    print(f"Total de viagens encontradas: {quantidade_viagens}")
+
+                    creds_benner = self.get_db_credentials_benner()
+
+                    with oracledb.connect(**creds_benner) as connection:
+                        with connection.cursor() as cursor:
+
+                            # Segunda consulta com os valores recuperados
+                            query2 = f"""
+                                SELECT DISTINCT
+                                NUMEROVIAGEM AS NUMERO_VIAGEM,
+                                HANDLE
+                                FROM GLOP_VIAGENS
+                                WHERE NUMEROVIAGEM IN ({numeros_viagem_str})
+                            """
+                            print(query2)
+
+                            print("Executando a segunda consulta...")
+                            cursor.execute(query2)
+                            resultados_finais = cursor.fetchall()
+
+                            num_linhas = len(resultados_finais)
+                            print(f"Número de linhas retornadas: {num_linhas}")
+
+                            # Extrair os números das viagens e formatar para a consulta SQL
+                            HANDLE_viagem = [str(linha[1]).strip() for linha in resultados_finais if linha[1] is not None]
+                            HANDLE_viagem_str = ",\n".join(HANDLE_viagem)  # Adiciona quebra de linha entre os valores
+
+                            print(f"Números de Viagem para consulta:\n{numeros_viagem_str}")
+
+                            print(f"Total de viagens encontradas: {quantidade_viagens}")
+
+                            # Segunda consulta com os valores recuperados
+                            query3 = f"""
+                                SELECT DISTINCT
+                                     VIGN.NUMEROVIAGEM      AS NUMERO_VIAGEM
+                                    ,DOCL.NUMERO            AS NUMERO_CTE
+                                    ,ENUME.NOME             AS TIPO_VIAGEM
+                                    ,NEGOC.NOME             AS NEGOCIACAO
+                                    ,GNPF.NOME              AS CLIENTE
+                                    ,DOCC.VALORCONSIDERADOMERCADORIA   AS VALOR
+                                    ,FILIO.NOME AS ORIGEM
+                                    ,FILID.NOME AS DESTINO
+                                    --,FILIO.LOGRADOURO || ' - Nº ' || FILIO.NUMERO || ', ' || 
+                                    ,FILIO.BAIRRO || ', ' || MUNOR.NOME || ' - ' || UFORI.SIGLA AS ENDERECO_ORIGEM
+                                    ,CASE WHEN FILIO.HANDLE = FILID.HANDLE
+                                        THEN BAIRR.NOME || ', ' || MUNIC.NOME || ' - ' || ESTAD.NOME
+                                        ELSE FILID.BAIRRO || ', ' || MUNDE.NOME || ' - ' || UFDES.SIGLA END AS ENDERECO_DESTINO 
+                                            --FILID.LOGRADOURO || ' - Nº ' || FILID.NUMERO || ', ' ||   
+                                FROM
+                                              GLGL_DOCUMENTOS               DOCL                                                                  --CTE
+                                    LEFT JOIN GLGL_DOCUMENTOASSOCIADOS      DOCA        ON      DOCA.DOCUMENTOLOGISTICA         = DOCL.HANDLE     --INTERMEDIARIA
+                                    LEFT JOIN GLGL_DOCUMENTOCLIENTES        DOCC        ON      DOCA.DOCUMENTOCLIENTE           = DOCC.HANDLE     --NOTA
+                                    LEFT JOIN GN_PESSOAS                    GNPF        ON      DOCC.TOMADORSERVICOPESSOA       = GNPF.HANDLE     --TOMADOR
+                                    LEFT JOIN GLOP_VIAGEMDOCUMENTOS         VGDL        ON      VGDL.DOCUMENTOLOGISTICA         = DOCL.HANDLE     --INTERMEDIARIA
+                                    LEFT JOIN GLOP_VIAGENS                  VIGN        ON      VGDL.VIAGEM                     = VIGN.HANDLE     --VIAGEM
+                                    LEFT JOIN GLGL_PESSOAS                  MOTO        ON      VIGN.MOTORISTA                  = MOTO.HANDLE     --MOTORISTA
+                                    LEFT JOIN GN_PESSOAS                    MOTO1       ON      MOTO.PESSOA                     = MOTO1.HANDLE    --MOTORISTA  NOME      
+                                    LEFT JOIN GLGL_PESSOAS                  BENE        ON      VIGN.BENEFICIARIO               = BENE.HANDLE     --BENEFICIARIO
+                                    LEFT JOIN GN_PESSOAS                    BENE1       ON      BENE.PESSOA                     = BENE1.HANDLE    --BENEFICIARIO  NOME  
+                                    LEFT JOIN MA_RECURSOS                   VEIC01      ON      VIGN.VEICULO1                   = VEIC01.HANDLE   --PLACA VEICULO
+                                    LEFT JOIN MA_RECURSOS                   VEIC02      ON      VIGN.VEICULO2                   = VEIC02.HANDLE   --PLACA VEICULO
+                                    LEFT JOIN MF_VEICULOTIPOS               TPV01       ON      VEIC01.TIPOVEICULO              = TPV01.HANDLE    --TIPO VEICULO
+                                    LEFT JOIN MF_VEICULOTIPOS               TPV02       ON      VEIC02.TIPOVEICULO              = TPV02.HANDLE    --TIPO VEICULO
+                                    LEFT JOIN GLCM_CONTRATOS                CONT        ON      DOCC.CONTRATO                   = CONT.HANDLE      
+                                    LEFT JOIN LOGISTICA.K_SETORES           SETOR       ON      CONT.K_SETOROTD                 = SETOR.HANDLE
+                                    LEFT JOIN GLGL_PESSOAENDERECOS          ENDOR       ON      DOCC.DESTINATARIOENDERECO       = ENDOR.HANDLE
+                                    LEFT JOIN FILIAIS                       FILIO       ON      VIGN.FILIALORIGEM               = FILIO.HANDLE
+                                    LEFT JOIN MUNICIPIOS                    MUNOR       ON      FILIO.MUNICIPIO                 = MUNOR.HANDLE
+                                    LEFT JOIN ESTADOS                       UFORI       ON      FILIO.ESTADO                    = UFORI.HANDLE
+                                    LEFT JOIN FILIAIS                       FILID       ON      VIGN.FILIALDESTINO              = FILID.HANDLE
+                                    LEFT JOIN MUNICIPIOS                    MUNDE       ON      FILID.MUNICIPIO                 = MUNDE.HANDLE
+                                    LEFT JOIN ESTADOS                       UFDES       ON      FILID.ESTADO                    = UFDES.HANDLE
+                                    LEFT JOIN GLGL_PESSOAENDERECOS          ENDDE       ON      DOCL.DESTINOENDERECO            = ENDDE.HANDLE
+                                    LEFT JOIN GLGL_SUBTIPOVIAGENS           STIPO       ON      VIGN.SUBTIPOVIAGEM              = STIPO.HANDLE
+                                    LEFT JOIN BAIRROS                       BAIRR       ON      ENDDE.BAIRRO                    = BAIRR.HANDLE
+                                    LEFT JOIN MUNICIPIOS                    MUNIC       ON      ENDDE.MUNICIPIO                 = MUNIC.HANDLE
+                                    LEFT JOIN ESTADOS                       ESTAD       ON      ENDDE.ESTADO                    = ESTAD.HANDLE
+                                    LEFT JOIN GLCM_NEGOCIACOES              NEGOC       ON      DOCL.NEGOCIACAO                 = NEGOC.HANDLE
+                                    LEFT JOIN GLGL_ENUMERACAOITEMS          ENUME       ON      VIGN.TIPOVIAGEM                 = ENUME.HANDLE
+                                WHERE
+                                    VIGN.HANDLE IN ({HANDLE_viagem_str})
+                                    AND UPPER(GNPF.NOME) = UPPER('ELI LILLY DO BRASIL LTDA')
+                                                            """
+                            print(query3)
+
+                            print("Executando a terceira consulta...")
+                            cursor.execute(query3)
+                            resultados_finais_HANDLE = cursor.fetchall()
+
+                            num_linhas3 = len(resultados_finais_HANDLE)
+                            print(f"Resultado final: {resultados_finais_HANDLE}")
+                            print(f"Número de linhas retornadas: {num_linhas3}")
+
+                            self.registrar_resultados_benner(resultados_finais_HANDLE)
+
+                            return resultados_finais_HANDLE, num_linhas3  # Retorna os dados e a contagem
 
         except oracledb.DatabaseError as e:
             print(f"Erro de banco de dados: {e}")
-            QtWidgets.QMessageBox.critical(self, "Erro", f"Falha na conexão ou 2 consulta dos numeros de viagem benner: {e}")
+            QtWidgets.QMessageBox.critical(self, "Erro", f"Falha na conexão ou consulta: {e}")
 
         except Exception as e:
             print(f"Erro inesperado: {e}")
-            print(traceback.format_exc())  # Exibe o erro completo no console
-            QtWidgets.QMessageBox.critical(self, "Erro inesperado", f"Ocorreu um erro inesperado  consulta dos numeros de viagem benner: {e}")
+            print(traceback.format_exc())
+            QtWidgets.QMessageBox.critical(self, "Erro inesperado", f"Ocorreu um erro: {e}")
 
+    # Função que registra as linhas retornadas da consulta benner
+    def registrar_resultados_benner(self, resultados_finais_HANDLE):
+        try:
+            # Conectar ao banco de dados onde os resultados serão registrados
+            creds_banco_destino = self.get_db_credentials()
+
+            with oracledb.connect(**creds_banco_destino) as connection:
+                with connection.cursor() as cursor:
+                    print("Registrando os resultados...")
+
+                    # Inserção dos resultados no banco de dados
+                    query_insert = """
+                        INSERT INTO FATURAMENTO_ESCOLTA_RESULTADO_BENNER (
+                            NUMERO_VIAGEM, 
+                            NUMERO_CTE, 
+                            TIPO_VIAGEM, 
+                            NEGOCIACAO, 
+                            CLIENTE, 
+                            VALOR, 
+                            ORIGEM, 
+                            DESTINO, 
+                            ENDERECO_ORIGEM, 
+                            ENDERECO_DESTINO
+                        ) 
+                        VALUES (
+                            :NUMERO_VIAGEM, 
+                            :NUMERO_CTE, 
+                            :TIPO_VIAGEM, 
+                            :NEGOCIACAO, 
+                            :CLIENTE, 
+                            :VALOR, 
+                            :ORIGEM, 
+                            :DESTINO, 
+                            :ENDERECO_ORIGEM, 
+                            :ENDERECO_DESTINO
+                        )
+                    """
+
+                    # Iterar sobre os resultados e registrar no banco de dados
+                    for linha in resultados_finais_HANDLE:
+                        # Preparar os dados para a inserção
+                        data_to_insert = {
+                            'NUMERO_VIAGEM': linha[0],
+                            'NUMERO_CTE': linha[1],
+                            'TIPO_VIAGEM': linha[2],
+                            'NEGOCIACAO': linha[3],
+                            'CLIENTE': linha[4],
+                            'VALOR': linha[5],
+                            'ORIGEM': linha[6],
+                            'DESTINO': linha[7],
+                            'ENDERECO_ORIGEM': linha[8],
+                            'ENDERECO_DESTINO': linha[9]
+                        }
+
+                        # Executar a inserção no banco
+                        cursor.execute(query_insert, data_to_insert)
+
+                    # Confirmar a transação
+                    connection.commit()
+                    print("Resultados registrados com sucesso!")
+
+        except oracledb.DatabaseError as e:
+            print(f"Erro de banco de dados: {e}")
+            QtWidgets.QMessageBox.critical(self, "Erro", f"Falha na conexão ou na inserção: {e}")
+
+        except Exception as e:
+            print(f"Erro inesperado: {e}")
+            print(traceback.format_exc())
+            QtWidgets.QMessageBox.critical(self, "Erro inesperado", f"Ocorreu um erro: {e}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
-1
+
+
