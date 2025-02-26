@@ -575,7 +575,6 @@ class MainWindow(QMainWindow):
         self.tela_processos_funcao.show()  # Exibe a tela
 
 
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = MainWindow()
